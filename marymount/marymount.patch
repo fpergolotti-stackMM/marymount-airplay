@@ -1,5 +1,5 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 523be1e..8ecf83e 100644
+index 523be1e..ecc3615 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -11,7 +11,8 @@ val localProps = Properties().apply {
@@ -23,8 +23,8 @@ index 523be1e..8ecf83e 100644
          targetSdk = 37
 -        versionCode = 33
 -        versionName = "0.0.33"
-+        versionCode = 1
-+        versionName = "1.0.0-mm (upstream 0.0.33)"
++        versionCode = 2
++        versionName = "1.0.1-mm (upstream 0.0.33)"
  
          externalNativeBuild {
              cmake {
@@ -115,6 +115,115 @@ index 6b48cf1..ae83eb1 100644
  extern "C"
  JNIEXPORT void JNICALL
  Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetDefaultStreamValues(
+diff --git a/app/src/main/cpp/patches/UxPlay/0008-marymount-hls-language-and-hardening.patch b/app/src/main/cpp/patches/UxPlay/0008-marymount-hls-language-and-hardening.patch
+new file mode 100644
+index 0000000..ed36f62
+--- /dev/null
++++ b/app/src/main/cpp/patches/UxPlay/0008-marymount-hls-language-and-hardening.patch
+@@ -0,0 +1,103 @@
++diff --git a/lib/airplay_video.c b/lib/airplay_video.c
++index 6f0d797..aa3c827 100644
++--- a/lib/airplay_video.c
+++++ b/lib/airplay_video.c
++@@ -407,15 +407,20 @@ language_t* master_playlist_process_language(const char * data, int *slices, int
++         languages[i].len = (int) (ptr + 1 - languages[i].start);
++ 	    length += languages[i].len;
++     }
++-    assert (count1 == count);
++-    
+++    /* Marymount: an unexpected playlist layout must not crash the receiver (asserts are
+++       compiled out in release builds): give up on filtering and keep the playlist as is */
+++    if (count1 != count || !ptr) {
+++        for (int i = 1; i <= count; i++) free(languages[i].name);
+++        free(languages);
+++        return NULL;
+++    }
+++
++     languages[count + 1].start = ++ptr;
++     languages[count + 1].len = strlen(ptr);
++     *languages[count + 1].code = '\0';
++     languages[count + 1].name = NULL;
++ 
++     length += languages[count + 1].len;
++-    assert(length == strlen(data));
++     *slices = count + 2;
++ 
++     int copies = 0;
++@@ -425,16 +430,24 @@ language_t* master_playlist_process_language(const char * data, int *slices, int
++         }
++      }
++ 
++-    *language_count = count/copies;
++-    assert(count == *language_count * copies);
++-
++-    /* verify expected structure of language choice information */
++-    for (int i = 1; i <= count; i++) {
++-  	int j = i - *language_count;
++-        if (j > 0) {
++-            assert (!strcmp(languages[i].code, languages[j].code));
+++    bool layout_ok = (length == strlen(data)) && copies > 0 && (count % copies == 0);
+++    if (layout_ok) {
+++        *language_count = count/copies;
+++        /* verify expected structure of language choice information */
+++        for (int i = 1; i <= count; i++) {
+++            int j = i - *language_count;
+++            if (j > 0 && strcmp(languages[i].code, languages[j].code)) {
+++                layout_ok = false;
+++                break;
+++            }
++         }
++     }
+++    if (!layout_ok) {
+++        for (int i = 1; i <= count; i++) free(languages[i].name);
+++        free(languages);
+++        *language_count = 0;
+++        return NULL;
+++    }
++     return languages;
++ }
++ 
++@@ -457,10 +470,13 @@ char * select_master_playlist_language(airplay_video_t *airplay_video, char *mas
++     int i_default = 1;
++     
++     const char *language_name = get_language_name(airplay_video);
+++    /* Marymount: the audio track picked on the sender (MediaSelectionOptions) has priority */
+++    bool sender_choice = false;
++     for (int i = 1; i <= language_count; i ++) {
++         if (language_name) {
++-            if (!strcmp(language_name, languages[i].name)) {
+++            if (languages[i].name && !strcmp(language_name, languages[i].name)) {
++                 i_default = i;
+++                sender_choice = true;
++             }
++         } else if (languages[i].is_default) {
++             i_default = i;
++@@ -470,7 +486,7 @@ char * select_master_playlist_language(airplay_video_t *airplay_video, char *mas
++     printf("\n");
++     assert(i_default >= 0);
++ 
++-    const char *ptrc = airplay_video->lang;;
+++    const char *ptrc = sender_choice ? NULL : airplay_video->lang;
++     code = NULL;
++     name = NULL;
++     while (ptrc){
++diff --git a/lib/http_handlers.h b/lib/http_handlers.h
++index 4d431c4..7f9c5a3 100644
++--- a/lib/http_handlers.h
+++++ b/lib/http_handlers.h
++@@ -180,7 +180,12 @@ http_handler_set_property(raop_conn_t *conn,
++     */
++ 
++     airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
++-    assert(airplay_video);
+++    /* Marymount: no current video (e.g. the sender changes audio track while switching items):
+++       answer with an error instead of dereferencing NULL (assert is compiled out in release) */
+++    if (!airplay_video) {
+++        logger_log(raop->logger, LOGGER_INFO, "setProperty %s ignored: no current video", property);
+++        goto post_error;
+++    }
++     if (!strcmp(property, "selectedMediaArray")) {
++         /* verify that this request contains a binary plist*/
++         char *header_str = NULL;
 diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/MainActivity.kt b/app/src/main/kotlin/io/github/jqssun/airplay/MainActivity.kt
 index 660300e..44be345 100644
 --- a/app/src/main/kotlin/io/github/jqssun/airplay/MainActivity.kt
@@ -199,7 +308,7 @@ index 0000000..d14f89b
 +    return "LIM $suffix"
 +}
 diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/Prefs.kt b/app/src/main/kotlin/io/github/jqssun/airplay/Prefs.kt
-index 21d7afb..d6484f8 100644
+index 21d7afb..0d611d8 100644
 --- a/app/src/main/kotlin/io/github/jqssun/airplay/Prefs.kt
 +++ b/app/src/main/kotlin/io/github/jqssun/airplay/Prefs.kt
 @@ -69,7 +69,8 @@ object Prefs {
@@ -225,7 +334,7 @@ index 21d7afb..d6484f8 100644
      val OVERSCANNED = bool("overscanned", false, restart = true)
      val REQUIRE_PIN = bool("require_pin", false, restart = true)
      val ALLOW_NEW_CONN = bool("allow_new_conn", true, restart = true)
-@@ -109,4 +112,9 @@ object Prefs {
+@@ -109,4 +112,14 @@ object Prefs {
      val ADVERTISE_AUDIO = bool("advertise_audio", true, restart = true)
      val LAUNCH_ON_CONNECT = bool("launch_on_connect", true)
      val USB_ONLY = bool("usb_only", false, restart = true)
@@ -234,6 +343,11 @@ index 21d7afb..d6484f8 100644
 +    // Marymount: after a decoder error restart from the cached SPS/PPS instead of freezing until
 +    // the next IDR (iOS sends one only when mirroring starts or the format changes)
 +    val SOFT_DECODER_RECOVERY = bool("soft_decoder_recovery", true, restart = true)
++    // Marymount: audio language for AirPlay Video with several tracks (YouTube auto-dubbing).
++    // Empty = the track chosen on the iPad, else the video's original/default track; a code such
++    // as "it" or "it:en" forces a preference. Upstream used the display's system languages, which
++    // picked English dubs on Italian videos when English came first in the panel settings.
++    val HLS_AUDIO_LANGUAGE = str("hls_audio_language", "", restart = true)
  }
 diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/bridge/NativeBridge.kt b/app/src/main/kotlin/io/github/jqssun/airplay/bridge/NativeBridge.kt
 index 29c9771..89587f4 100644
@@ -554,7 +668,7 @@ index 1641aa5..b201912 100644
      }
  }
 diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt b/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
-index 7dfdabc..1bae879 100644
+index 7dfdabc..84162ce 100644
 --- a/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
 +++ b/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
 @@ -12,6 +12,9 @@ import android.content.SharedPreferences
@@ -631,7 +745,7 @@ index 7dfdabc..1bae879 100644
  
          val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
          wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
-@@ -407,6 +444,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -407,13 +444,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
          videoRenderer.benchmarkLog = prefs[Prefs.BENCHMARK_LOG]
          videoRenderer.benchmarkLogCallback = { msg -> logCallback?.invoke(msg) }
          videoRenderer.scheduledOutputBufferRelease = prefs[Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE]
@@ -639,7 +753,16 @@ index 7dfdabc..1bae879 100644
          NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
          NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
          val advertiseVideo = prefs[Prefs.ADVERTISE_VIDEO]
-@@ -454,6 +492,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+         val advertiseMirroring = prefs[Prefs.ADVERTISE_MIRRORING]
+         val advertiseAudio = prefs[Prefs.ADVERTISE_AUDIO]
+         NativeBridge.nativeSetHlsEnabled(nativeHandle, advertiseVideo)
+-        NativeBridge.nativeSetLang(nativeHandle, resources.configuration.locales.toLanguageTags().replace(',', ':'))
++        // Marymount: do not force the panel's system languages on YouTube audio tracks
++        NativeBridge.nativeSetLang(nativeHandle, prefs[Prefs.HLS_AUDIO_LANGUAGE].trim().replace(',', ':'))
+         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_MIRROR, advertiseMirroring)
+         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_AUDIO, advertiseAudio)
+         NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
+@@ -454,6 +493,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
              }.apply { start() }
          } else {
              nsdManager?.register(services)
@@ -648,7 +771,7 @@ index 7dfdabc..1bae879 100644
          }
  
          _serverState.value = ServerState.RUNNING
-@@ -464,6 +504,49 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -464,6 +505,49 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
          log("Server started on port $port")
      }
  
@@ -698,7 +821,7 @@ index 7dfdabc..1bae879 100644
      private fun _orientationFollowsDevice(): Boolean =
          prefs[Prefs.RESOLUTION] == Prefs.AUTO
  
-@@ -529,6 +612,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -529,6 +613,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
      }
  
      private fun _shutdown() {
@@ -707,7 +830,7 @@ index 7dfdabc..1bae879 100644
          audioRenderer.detachEngine()
          if (nativeHandle != 0L) {
              NativeBridge.nativeStop(nativeHandle)
-@@ -750,6 +835,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -750,6 +836,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
      }
  
      override fun onConnectionInit() {
@@ -715,7 +838,7 @@ index 7dfdabc..1bae879 100644
          val firstConnection = _connectionCount.value == 0
          _connectionCount.value++
          log("Client connected (${_connectionCount.value})")
-@@ -764,8 +850,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -764,8 +851,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
      override fun onConnectionDestroy() {
          _connectionCount.value = (_connectionCount.value - 1).coerceAtLeast(0)
          if (_connectionCount.value == 0) {
@@ -730,7 +853,7 @@ index 7dfdabc..1bae879 100644
              // last client gone: release audio output devices to save power
              audioRenderer.stop()
              _audioOnly.value = false
-@@ -801,6 +891,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -801,6 +892,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
          _lastPin = pin
          pinCallback?.invoke(pin)
          _updateMediaNotification()
@@ -739,7 +862,7 @@ index 7dfdabc..1bae879 100644
      }
  
      override fun onMetadata(data: ByteArray) {
-@@ -1159,5 +1251,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -1159,5 +1252,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
  
          private const val AUDIO_CONFIG_DEBOUNCE_MS = 500L
          private const val SERVER_RESTART_DEBOUNCE_MS = 500L
