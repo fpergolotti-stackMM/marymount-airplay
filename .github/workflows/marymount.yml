@@ -1,0 +1,76 @@
+name: Build Marymount AirPlay
+
+# Builds the Marymount flavour of the receiver: upstream source + marymount/marymount.patch.
+# The APK is published as a pre-release; it is signed here only if the MM_KEYSTORE_* secrets exist.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "marymount/**"
+      - ".github/workflows/marymount.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: marymount-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Apply Marymount patch
+        run: |
+          git apply --check marymount/marymount.patch
+          git apply marymount/marymount.patch
+          git status --short
+
+      - name: Use JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: "zulu"
+          java-version: "21"
+          cache: "gradle"
+
+      - name: Build release APK
+        run: |
+          export SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --stacktrace --no-daemon
+
+      - name: Collect (and sign if the secrets are set)
+        env:
+          KS_B64: ${{ secrets.MM_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.MM_KEYSTORE_PASS }}
+          KS_ALIAS: ${{ secrets.MM_KEY_ALIAS }}
+        run: |
+          mkdir -p out
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "built: $APK"
+          cp "$APK" out/marymount-airplay-unsigned.apk
+          if [ -n "$KS_B64" ]; then
+            BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+            echo "$KS_B64" | base64 -d > ks.jks
+            "$BT/zipalign" -p -f 4 "$APK" aligned.apk
+            "$BT/apksigner" sign --ks ks.jks --ks-pass env:KS_PASS --ks-key-alias "${KS_ALIAS:-marymount}" --out out/marymount-airplay.apk aligned.apk
+            "$BT/apksigner" verify --print-certs out/marymount-airplay.apk
+            rm -f ks.jks aligned.apk
+          fi
+          ls -la out
+          sha256sum out/*.apk
+
+      - name: Publish build
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: mm-build-${{ github.run_number }}
+          name: Marymount AirPlay build ${{ github.run_number }}
+          prerelease: true
+          files: out/*.apk
