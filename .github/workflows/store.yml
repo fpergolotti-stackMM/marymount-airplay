@@ -1,0 +1,81 @@
+name: Build Screen Mirroring (store edition)
+
+# Builds the Google Play edition "Screen Mirroring": upstream source + store/store.patch.
+# The APK is published as a pre-release; it is signed here only if the SM_KEYSTORE_* secrets exist.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "store/**"
+      - ".github/workflows/store.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: store-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Apply Marymount patch
+        run: |
+          git apply --check store/store.patch
+          git apply store/store.patch
+          git status --short
+
+      - name: Use JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: "zulu"
+          java-version: "21"
+          cache: "gradle"
+
+      - name: Build release APK
+        run: |
+          export SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
+          chmod +x ./gradlew
+          ./gradlew bundleRelease assembleRelease --stacktrace --no-daemon
+
+      - name: Collect (and sign if the secrets are set)
+        env:
+          KS_B64: ${{ secrets.SM_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.SM_KEYSTORE_PASS }}
+          KS_ALIAS: ${{ secrets.SM_KEY_ALIAS }}
+        run: |
+          mkdir -p out
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "built: $APK"
+          cp "$APK" out/screen-mirroring-unsigned.apk
+          AAB=$(ls app/build/outputs/bundle/release/*.aab | head -1)
+          echo "bundle: $AAB"
+          cp "$AAB" out/screen-mirroring-unsigned.aab
+          if [ -n "$KS_B64" ]; then
+            BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+            echo "$KS_B64" | base64 -d > ks.jks
+            "$BT/zipalign" -p -f 4 "$APK" aligned.apk
+            "$BT/apksigner" sign --ks ks.jks --ks-pass env:KS_PASS --ks-key-alias "${KS_ALIAS:-marymount}" --out out/screen-mirroring.apk aligned.apk
+            "$BT/apksigner" verify --print-certs out/screen-mirroring.apk
+            rm -f ks.jks aligned.apk
+          fi
+          ls -la out
+          sha256sum out/*.apk out/*.aab
+
+      - name: Publish build
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: store-build-${{ github.run_number }}
+          name: Screen Mirroring build ${{ github.run_number }}
+          prerelease: true
+          files: |
+            out/*.apk
+            out/*.aab
