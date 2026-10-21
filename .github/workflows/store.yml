@@ -26,11 +26,17 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Apply Marymount patch
+      - name: Apply store patch
         run: |
           git apply --check store/store.patch
           git apply store/store.patch
           git status --short
+
+      - name: Use official OpenSSL source (mirror.viaduck.org no longer answers)
+        run: |
+          F=app/src/main/cpp/third_party/openssl-cmake/cmake/BuildOpenSSL.cmake
+          sed -i 's#https://mirror.viaduck.org/openssl/openssl-${OPENSSL_BUILD_VERSION}.tar.gz#https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_BUILD_VERSION}/openssl-${OPENSSL_BUILD_VERSION}.tar.gz#' "$F"
+          grep -n "openssl/releases" "$F"
 
       - name: Use JDK
         uses: actions/setup-java@v6
@@ -43,7 +49,9 @@ jobs:
         run: |
           export SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
           chmod +x ./gradlew
-          ./gradlew bundleRelease assembleRelease --stacktrace --no-daemon
+          ./gradlew bundleRelease --stacktrace --no-daemon
+          # sideload APK (GitHub/website): includes the PayPal coffee button
+          ./gradlew assembleRelease -Psideload=true --stacktrace --no-daemon
 
       - name: Collect (and sign if the secrets are set)
         env:
