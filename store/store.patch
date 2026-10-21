@@ -1,5 +1,5 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 523be1e..e78038b 100644
+index 523be1e..3b925ba 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -11,6 +11,7 @@ val localProps = Properties().apply {
@@ -10,7 +10,7 @@ index 523be1e..e78038b 100644
  val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
  
  android {
-@@ -30,11 +31,12 @@ android {
+@@ -30,11 +31,19 @@ android {
      }
  
      defaultConfig {
@@ -21,11 +21,26 @@ index 523be1e..e78038b 100644
          targetSdk = 37
 -        versionCode = 33
 -        versionName = "0.0.33"
-+        versionCode = 1
-+        versionName = "1.0.0"
++        versionCode = 2
++        versionName = "1.0.1"
++        // Store edition: PayPal "buy me a coffee" only in the APK distributed outside Google Play
++        // (build with -Psideload=true); the Play build keeps it empty (Play payments policy)
++        val sideload = (project.findProperty("sideload") as String?) == "true"
++        buildConfigField(
++            "String", "DONATE_URL",
++            if (sideload) "\"https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=francesco.pergolotti%40gmail.com&currency_code=EUR&item_name=Screen%20Mirroring\"" else "\"\""
++        )
  
          externalNativeBuild {
              cmake {
+@@ -85,6 +94,7 @@ android {
+     }
+ 
+     buildFeatures {
++        buildConfig = true
+         compose = true
+         prefab = true
+     }
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
 index bfe06e7..cec00dc 100644
 --- a/app/src/main/AndroidManifest.xml
@@ -1365,14 +1380,15 @@ index d4af0f5..de80a0b 100644
  private fun FullscreenVideo(
      viewModel: MainViewModel,
 diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt b/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
-index 03b520f..258d43c 100644
+index 03b520f..6e6abdc 100644
 --- a/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
 +++ b/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
-@@ -26,8 +26,14 @@ import androidx.compose.ui.unit.dp
+@@ -26,8 +26,15 @@ import androidx.compose.ui.unit.dp
  import androidx.lifecycle.Lifecycle
  import androidx.lifecycle.LifecycleEventObserver
  import androidx.lifecycle.compose.LocalLifecycleOwner
 +import io.github.jqssun.airplay.Branding
++import io.github.jqssun.airplay.BuildConfig
  import io.github.jqssun.airplay.Prefs
  import io.github.jqssun.airplay.R
 +import androidx.activity.compose.rememberLauncherForActivityResult
@@ -1383,7 +1399,7 @@ index 03b520f..258d43c 100644
  import io.github.jqssun.airplay.viewmodel.MainViewModel
  import androidx.compose.ui.res.stringArrayResource
  import androidx.compose.ui.res.stringResource
-@@ -56,6 +62,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
+@@ -56,6 +63,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
      val autoStart by viewModel.pref(Prefs.AUTO_START).collectAsState()
      val bootAutoStart by viewModel.pref(Prefs.BOOT_AUTO_START).collectAsState()
      val runInBackground by viewModel.pref(Prefs.RUN_IN_BACKGROUND).collectAsState()
@@ -1391,7 +1407,7 @@ index 03b520f..258d43c 100644
      val serverPort by viewModel.pref(Prefs.SERVER_PORT).collectAsState()
      val audioLatencyMs by viewModel.pref(Prefs.AUDIO_LATENCY_MS).collectAsState()
      val forceSwAlac by viewModel.pref(Prefs.FORCE_SW_ALAC).collectAsState()
-@@ -72,6 +79,21 @@ fun SettingsScreen(viewModel: MainViewModel) {
+@@ -72,6 +80,21 @@ fun SettingsScreen(viewModel: MainViewModel) {
      val audioCushionMs by viewModel.pref(Prefs.AUDIO_CUSHION_MS).collectAsState()
      val audioAdaptiveStep by viewModel.pref(Prefs.AUDIO_ADAPTIVE_STEP).collectAsState()
      val oboeBufferFrames by viewModel.pref(Prefs.OBOE_BUFFER_FRAMES).collectAsState()
@@ -1413,7 +1429,7 @@ index 03b520f..258d43c 100644
  
      Column(
          modifier = Modifier
-@@ -108,6 +130,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
+@@ -108,6 +131,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
              onCheckedChange = { viewModel.set(Prefs.RUN_IN_BACKGROUND, it) }
          )
  
@@ -1427,7 +1443,7 @@ index 03b520f..258d43c 100644
          SectionHeader(stringResource(R.string.section_connection))
  
          SettingSegmented(
-@@ -223,6 +252,68 @@ fun SettingsScreen(viewModel: MainViewModel) {
+@@ -223,6 +253,89 @@ fun SettingsScreen(viewModel: MainViewModel) {
              onCheckedChange = { viewModel.set(Prefs.FORCE_SW_AAC, it) }
          )
  
@@ -1485,6 +1501,27 @@ index 03b520f..258d43c 100644
 +            checked = brandTips,
 +            onCheckedChange = { viewModel.set(Prefs.BRAND_SHOW_TIPS, it) }
 +        )
++
++        // Store edition: only present in the APK distributed outside Google Play
++        if (BuildConfig.DONATE_URL.isNotEmpty()) {
++            ListItem(
++                headlineContent = { Text(stringResource(R.string.btn_donate)) },
++                supportingContent = { Text(stringResource(R.string.btn_donate_desc)) },
++                trailingContent = {
++                    Button(onClick = {
++                        try {
++                            brandCtx.startActivity(
++                                Intent(Intent.ACTION_VIEW, Uri.parse(BuildConfig.DONATE_URL))
++                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
++                            )
++                        } catch (_: Exception) {
++                        }
++                    }) {
++                        Text("☕")
++                    }
++                }
++            )
++        }
 +
 +        Text(
 +            text = stringResource(R.string.about_license),
@@ -1662,10 +1699,10 @@ index 8fde456..0f3ea70 100644
  </adaptive-icon>
 diff --git a/app/src/main/res/values-it/strings.xml b/app/src/main/res/values-it/strings.xml
 new file mode 100644
-index 0000000..efb572c
+index 0000000..2654090
 --- /dev/null
 +++ b/app/src/main/res/values-it/strings.xml
-@@ -0,0 +1,200 @@
+@@ -0,0 +1,202 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!-- Italian translation -->
 +<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
@@ -1865,9 +1902,11 @@ index 0000000..efb572c
 +    <string name="mc_brand_logo_url_desc">Indirizzo HTTPS di un’immagine PNG o JPEG da usare come logo</string>
 +    <string name="mc_hls_audio_language">Lingua audio preferita per i video</string>
 +    <string name="about_license">Software open source, licenza GPL-3.0. Basato su android-airplay-server di jqssun e su UxPlay. Codice sorgente: github.com/fpergolotti-stackMM/marymount-airplay. AirPlay è un marchio di Apple Inc.; questa app non è affiliata ad Apple.</string>
++    <string name="btn_donate">Offri un caffè allo sviluppatore</string>
++    <string name="btn_donate_desc">Sostieni lo sviluppo con una donazione tramite PayPal</string>
 +</resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index ef5286c..3306993 100644
+index ef5286c..1fd2c38 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -1,6 +1,6 @@
@@ -1895,7 +1934,7 @@ index ef5286c..3306993 100644
  
      <!-- Settings: Connection -->
      <string name="setting_require_pin">Require PIN (Beta)</string>
-@@ -199,4 +202,30 @@
+@@ -199,4 +202,32 @@
      <string name="debug_audio_glitch">Glitch: trim=%1$d drop=%2$d sil=%3$d ur=%4$d xrun=%5$d</string>
      <string name="debug_audio_decode">Decode: %1$s</string>
      <string name="debug_clients">Clients: %1$d</string>
@@ -1925,6 +1964,8 @@ index ef5286c..3306993 100644
 +    <string name="mc_brand_logo_url_desc">HTTPS address of a PNG or JPEG image to show as logo</string>
 +    <string name="mc_hls_audio_language">Preferred audio language for videos</string>
 +    <string name="about_license">Open source software, GPL-3.0 licence. Based on android-airplay-server by jqssun and UxPlay. Source code: github.com/fpergolotti-stackMM/marymount-airplay. AirPlay is a trademark of Apple Inc.; this app is not affiliated with Apple.</string>
++    <string name="btn_donate">Buy the developer a coffee</string>
++    <string name="btn_donate_desc">Support development with a donation via PayPal</string>
  </resources>
 diff --git a/app/src/main/res/xml/app_restrictions.xml b/app/src/main/res/xml/app_restrictions.xml
 new file mode 100644
