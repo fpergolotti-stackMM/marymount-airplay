@@ -1,5 +1,5 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 523be1e..3b925ba 100644
+index 523be1e..419d220 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -11,6 +11,7 @@ val localProps = Properties().apply {
@@ -21,8 +21,8 @@ index 523be1e..3b925ba 100644
          targetSdk = 37
 -        versionCode = 33
 -        versionName = "0.0.33"
-+        versionCode = 2
-+        versionName = "1.0.1"
++        versionCode = 3
++        versionName = "1.0.2"
 +        // Store edition: PayPal "buy me a coffee" only in the APK distributed outside Google Play
 +        // (build with -Psideload=true); the Play build keeps it empty (Play payments policy)
 +        val sideload = (project.findProperty("sideload") as String?) == "true"
@@ -1083,10 +1083,20 @@ index 7dfdabc..e39b261 100644
      }
  }
 diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt b/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt
-index d4af0f5..de80a0b 100644
+index d4af0f5..0e3a4d0 100644
 --- a/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt
 +++ b/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt
-@@ -13,6 +13,8 @@ import androidx.compose.foundation.clickable
+@@ -1,6 +1,9 @@
+ package io.github.jqssun.airplay.ui
+ 
+ import android.app.Activity
++import io.github.jqssun.airplay.BuildConfig
++import android.net.Uri
++import android.content.Intent
+ import android.content.pm.ActivityInfo
+ import android.content.pm.PackageManager
+ import android.content.res.Configuration
+@@ -13,6 +16,8 @@ import androidx.compose.foundation.clickable
  import androidx.compose.foundation.focusable
  import androidx.compose.foundation.gestures.detectTapGestures
  import androidx.compose.foundation.layout.*
@@ -1095,7 +1105,7 @@ index d4af0f5..de80a0b 100644
  import androidx.compose.foundation.shape.CircleShape
  import androidx.compose.foundation.shape.RoundedCornerShape
  import androidx.compose.material.icons.Icons
-@@ -48,7 +50,11 @@ import androidx.core.view.WindowCompat
+@@ -48,7 +53,11 @@ import androidx.core.view.WindowCompat
  import androidx.core.view.WindowInsetsCompat
  import androidx.core.view.WindowInsetsControllerCompat
  import io.github.jqssun.airplay.Prefs
@@ -1107,7 +1117,7 @@ index d4af0f5..de80a0b 100644
  import io.github.jqssun.airplay.service.AirPlayService.ServerState
  import io.github.jqssun.airplay.ui.gestures.BrightnessState
  import io.github.jqssun.airplay.ui.gestures.DoubleTapIndicator
-@@ -412,7 +418,8 @@ fun MainScreen(
+@@ -412,7 +421,8 @@ fun MainScreen(
                          title = videoTitle,
                          videoUrl = videoLocation,
                          downloadProgress = downloadProgress,
@@ -1117,7 +1127,7 @@ index d4af0f5..de80a0b 100644
                          onBackClick = { viewModel.stopVideoPlayback() },
                          onSpeedClick = {
                              overlayVisible = false
-@@ -554,8 +561,10 @@ fun MainScreen(
+@@ -554,8 +564,10 @@ fun MainScreen(
              text = {
                  Text(
                      text = pin!!,
@@ -1129,7 +1139,7 @@ index d4af0f5..de80a0b 100644
                      modifier = Modifier.fillMaxWidth(),
                  )
              },
-@@ -601,8 +610,22 @@ private fun OverviewContent(
+@@ -601,8 +613,22 @@ private fun OverviewContent(
      val grant = state != ServerState.RUNNING && localNetwork != LocalNetworkAccess.GRANTED
      val connections by viewModel.connectionCount.collectAsState()
      val serverName by viewModel.pref(Prefs.SERVER_NAME).collectAsState()
@@ -1152,7 +1162,7 @@ index d4af0f5..de80a0b 100644
      val mirroringActive by viewModel.mirroringActive.collectAsState()
      val videoPlaybackActive by viewModel.videoPlaybackActive.collectAsState()
      val debugEnabled by viewModel.pref(Prefs.DEBUG_ENABLED).collectAsState()
-@@ -632,7 +655,18 @@ private fun OverviewContent(
+@@ -632,7 +658,18 @@ private fun OverviewContent(
                  if (state == ServerState.RUNNING && (mirroringActive || idlePreview)) {
                      video()
                  }
@@ -1172,7 +1182,7 @@ index d4af0f5..de80a0b 100644
                      Column(horizontalAlignment = Alignment.CenterHorizontally) {
                          Icon(
                              imageVector = if (connections > 0) Icons.Default.CastConnected else Icons.Default.Cast,
-@@ -652,6 +686,26 @@ private fun OverviewContent(
+@@ -652,6 +689,26 @@ private fun OverviewContent(
                              textAlign = TextAlign.Center,
                              modifier = Modifier.padding(horizontal = 24.dp)
                          )
@@ -1199,7 +1209,7 @@ index d4af0f5..de80a0b 100644
                      }
                  } else if (connecting) {
                      Text(
-@@ -717,7 +771,7 @@ private fun OverviewContent(
+@@ -717,7 +774,7 @@ private fun OverviewContent(
                  ) {
                      Column {
                          Text(
@@ -1208,10 +1218,40 @@ index d4af0f5..de80a0b 100644
                              style = MaterialTheme.typography.titleMedium,
                              fontWeight = FontWeight.SemiBold
                          )
-@@ -768,6 +822,170 @@ private fun OverviewContent(
-     }
- }
- 
+@@ -763,8 +820,197 @@ private fun OverviewContent(
+                         Text(stringResource(label))
+                     }
+                 }
++                // Store edition: "buy me a coffee", only in the APK distributed outside Google Play
++                if (BuildConfig.DONATE_URL.isNotEmpty()) {
++                    val donateCtx = LocalContext.current
++                    Spacer(Modifier.height(16.dp))
++                    Button(
++                        onClick = {
++                            try {
++                                donateCtx.startActivity(
++                                    Intent(Intent.ACTION_VIEW, Uri.parse(BuildConfig.DONATE_URL))
++                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
++                                )
++                            } catch (_: Exception) {
++                            }
++                        },
++                        modifier = Modifier.fillMaxWidth().dpadFocus()
++                    ) {
++                        Icon(
++                            imageVector = Icons.Default.Coffee,
++                            contentDescription = null,
++                            modifier = Modifier.size(20.dp)
++                        )
++                        Spacer(Modifier.width(8.dp))
++                        Text(stringResource(R.string.btn_donate))
++                    }
++                }
++            }
++        }
++    }
++}
++
 +// Store edition: customisable idle screen (logo, organisation, title, Wi-Fi name, tips)
 +@Composable
 +private fun BrandWelcome(
@@ -1316,8 +1356,8 @@ index d4af0f5..de80a0b 100644
 +                    textAlign = if (wide) TextAlign.Start else TextAlign.Center
 +                )
 +                }
-+            }
-+        }
+             }
+         }
 +        if (wide) {
 +            Row(
 +                modifier = Modifier.fillMaxSize(),
@@ -1373,12 +1413,9 @@ index d4af0f5..de80a0b 100644
 +            style = MaterialTheme.typography.titleLarge,
 +            color = MaterialTheme.colorScheme.onSurface
 +        )
-+    }
-+}
-+
- @Composable
- private fun FullscreenVideo(
-     viewModel: MainViewModel,
+     }
+ }
+ 
 diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt b/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
 index 03b520f..6e6abdc 100644
 --- a/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
