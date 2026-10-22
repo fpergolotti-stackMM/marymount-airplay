@@ -30,6 +30,12 @@ jobs:
         run: |
           git apply --check marymount/marymount.patch
           git apply marymount/marymount.patch
+          # small follow-up patches, applied in name order
+          for p in marymount/updates/*.patch; do
+            [ -e "$p" ] || continue
+            echo "applying $p"
+            git apply "$p"
+          done
           git status --short
 
       - name: Use official OpenSSL source (mirror.viaduck.org no longer answers)
