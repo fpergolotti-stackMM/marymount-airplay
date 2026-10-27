@@ -1,0 +1,124 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index bfaf78f..4e3b38b 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -35,8 +35,8 @@ android {
+         applicationId = "it.marymount.airplay"
+         minSdk = 24
+         targetSdk = 37
+-        versionCode = 5
+-        versionName = "1.2.1-mm (upstream 0.0.33)"
++        versionCode = 6
++        versionName = "1.2.2-mm (upstream 0.0.33)"
+ 
+         externalNativeBuild {
+             cmake {
+diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt b/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
+index 84162ce..b67c897 100644
+--- a/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
++++ b/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
+@@ -19,6 +19,8 @@ import android.media.AudioManager
+ import android.os.Binder
+ import android.os.Build
+ import android.os.Handler
++import android.database.ContentObserver
++import android.provider.Settings
+ import android.os.IBinder
+ import android.os.Looper
+ import android.os.PowerManager
+@@ -244,6 +246,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+ 
+     override fun onCreate() {
+         super.onCreate()
++        // Marymount: follow renames of the board (Settings / DMS) while the name is automatic
++        runCatching {
++            contentResolver.registerContentObserver(
++                Settings.Global.getUriFor("device_name"), false, _deviceNameObserver
++            )
++        }
+         createNotificationChannel()
+         dacpController = DacpController(this)
+         dacpPlayer = DacpPlayer(
+@@ -400,6 +408,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+         val effectiveName = prefs[Prefs.SERVER_NAME].trim().let {
+             if (it.isEmpty() || it == LEGACY_DEFAULT_NAME) autoServerName(this) else it
+         }
++        _advertisedName = effectiveName
+ 
+         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
+@@ -605,6 +614,30 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+         stopSelf()
+     }
+ 
++    // Marymount: name currently announced on the network
++    private var _advertisedName = ""
++
++    private val _deviceNameObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
++        override fun onChange(selfChange: Boolean) {
++            _mainHandler.removeCallbacks(_applyDeviceName)
++            _mainHandler.postDelayed(_applyDeviceName, 2_000)
++        }
++    }
++
++    // Re-announce with the new board name; waits for active sessions to end first
++    private val _applyDeviceName: Runnable = object : Runnable {
++        override fun run() {
++            val manual = prefs[Prefs.SERVER_NAME].trim().let { it.isNotEmpty() && it != LEGACY_DEFAULT_NAME }
++            if (manual || _serverState.value != ServerState.RUNNING) return
++            if (autoServerName(this@AirPlayService) == _advertisedName) return
++            if (_connectionCount.value > 0) {
++                _mainHandler.postDelayed(this, 30_000)
++                return
++            }
++            _restartServer()
++        }
++    }
++
+     private fun _restartServer() {
+         if (_serverState.value != ServerState.RUNNING) return
+         _shutdown()
+@@ -704,6 +737,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+     }
+ 
+     override fun onDestroy() {
++        _mainHandler.removeCallbacks(_applyDeviceName)
++        runCatching { contentResolver.unregisterContentObserver(_deviceNameObserver) }
+         stopServer()
+         dacpPlayer.release()
+         mediaReceiver?.let {
+diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt b/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
+index 1cdad34..47fc46c 100644
+--- a/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
++++ b/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
+@@ -89,7 +89,9 @@ fun SettingsScreen(viewModel: MainViewModel, onOpenLogs: () -> Unit = {}) {
+         SettingTextField(
+             label = stringResource(R.string.setting_server_name),
+             value = serverName,
+-            onCommit = { viewModel.set(Prefs.SERVER_NAME, it) }
++            // Marymount: show which board name is used when the field is empty
++            description = stringResource(R.string.setting_server_name_desc, io.github.jqssun.airplay.autoServerName(LocalContext.current)),
++            onCommit = { viewModel.set(Prefs.SERVER_NAME, it.trim()) }
+         )
+ 
+         SettingTextField(
+diff --git a/app/src/main/res/values-it/strings.xml b/app/src/main/res/values-it/strings.xml
+index c33f626..506ed82 100644
+--- a/app/src/main/res/values-it/strings.xml
++++ b/app/src/main/res/values-it/strings.xml
+@@ -184,4 +184,5 @@
+     <string name="setting_logs_desc">Eventi del ricevitore, utili in caso di problemi</string>
+     <string name="mm_credit">Sviluppata internamente dal team Marymount IT</string>
+     <string name="mm_about">Sviluppata internamente dal team Marymount IT. Basata sul software open source android-airplay-server (GPL-3.0) e UxPlay.</string>
++    <string name="setting_server_name_desc">Lascia vuoto per usare il nome della lavagna: «%1$s». Un nome scritto qui ha la precedenza.</string>
+ </resources>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 7c3ed11..73d7598 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -216,4 +216,5 @@
+     <string name="mm_wifi_name" translatable="false">MarymountDevices</string>
+     <string name="mm_credit">Developed in-house by the Marymount IT team</string>
+     <string name="mm_about">Developed in-house by the Marymount IT team. Based on the open-source software android-airplay-server (GPL-3.0) and UxPlay.</string>
++    <string name="setting_server_name_desc">Leave empty to use the board name: “%1$s”. A name typed here takes priority.</string>
+ </resources>
