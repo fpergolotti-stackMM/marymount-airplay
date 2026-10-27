@@ -1,5 +1,5 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 523be1e..419d220 100644
+index 523be1e..1876ef2 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -11,6 +11,7 @@ val localProps = Properties().apply {
@@ -21,14 +21,14 @@ index 523be1e..419d220 100644
          targetSdk = 37
 -        versionCode = 33
 -        versionName = "0.0.33"
-+        versionCode = 3
-+        versionName = "1.0.2"
++        versionCode = 4
++        versionName = "1.0.3"
 +        // Store edition: PayPal "buy me a coffee" only in the APK distributed outside Google Play
 +        // (build with -Psideload=true); the Play build keeps it empty (Play payments policy)
 +        val sideload = (project.findProperty("sideload") as String?) == "true"
 +        buildConfigField(
 +            "String", "DONATE_URL",
-+            if (sideload) "\"https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=francesco.pergolotti%40gmail.com&currency_code=EUR&item_name=Screen%20Mirroring\"" else "\"\""
++            if (sideload) "\"https://www.paypal.com/donate/?hosted_button_id=BGZYMT85WTQ6A\"" else "\"\""
 +        )
  
          externalNativeBuild {
@@ -843,10 +843,10 @@ index 1641aa5..b201912 100644
      }
  }
 diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt b/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
-index 7dfdabc..e39b261 100644
+index 7dfdabc..c7f41a4 100644
 --- a/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
 +++ b/app/src/main/kotlin/io/github/jqssun/airplay/service/AirPlayService.kt
-@@ -12,6 +12,9 @@ import android.content.SharedPreferences
+@@ -12,10 +12,15 @@ import android.content.SharedPreferences
  import android.content.pm.ServiceInfo
  import android.content.res.Configuration
  import android.graphics.BitmapFactory
@@ -856,7 +856,13 @@ index 7dfdabc..e39b261 100644
  import android.media.AudioManager
  import android.os.Binder
  import android.os.Build
-@@ -33,7 +36,10 @@ import androidx.lifecycle.lifecycleScope
+ import android.os.Handler
++import android.database.ContentObserver
++import android.provider.Settings
+ import android.os.IBinder
+ import android.os.Looper
+ import android.os.PowerManager
+@@ -33,7 +38,10 @@ import androidx.lifecycle.lifecycleScope
  import androidx.media.app.NotificationCompat as MediaNotificationCompat
  import io.github.jqssun.airplay.MainActivity
  import io.github.jqssun.airplay.Prefs
@@ -867,7 +873,7 @@ index 7dfdabc..e39b261 100644
  import io.github.jqssun.airplay.changes
  import io.github.jqssun.airplay.get
  import io.github.jqssun.airplay.hasLocalNetwork
-@@ -183,6 +189,32 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -183,6 +191,32 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
      private var _volSyncSteps = 0
      private val _volSyncTimeout = Runnable { _volSyncEnd() }
  
@@ -900,7 +906,20 @@ index 7dfdabc..e39b261 100644
      var logCallback: ((String) -> Unit)? = null
  
      @Volatile private var _lastPin: String? = null
-@@ -313,6 +345,17 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -214,6 +248,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+ 
+     override fun onCreate() {
+         super.onCreate()
++        // Follow renames of the device (Android Settings / MDM) while the name is automatic
++        runCatching {
++            contentResolver.registerContentObserver(
++                Settings.Global.getUriFor("device_name"), false, _deviceNameObserver
++            )
++        }
+         createNotificationChannel()
+         dacpController = DacpController(this)
+         dacpPlayer = DacpPlayer(
+@@ -313,6 +353,17 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
          }
          airPlayVideoPlayer.onTitle = { _videoTitle.value = it ?: "" }
          airPlayVideoPlayer.onEnded = { _endVideoPlayback("AirPlay Video stopped (player)") }
@@ -918,7 +937,7 @@ index 7dfdabc..e39b261 100644
          airPlayVideoPlayer.onPlaybackInfo = { snapshot ->
              if (nativeHandle != 0L) {
                  NativeBridge.nativeUpdatePlaybackInfo(nativeHandle, snapshot.position, snapshot.duration, snapshot.rate, snapshot.ready)
-@@ -362,7 +405,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -362,7 +413,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
              _failStart()
              return
          }
@@ -927,10 +946,11 @@ index 7dfdabc..e39b261 100644
 +        val effectiveName = prefs[Prefs.SERVER_NAME].trim().let {
 +            if (it.isEmpty() || it == LEGACY_DEFAULT_NAME) autoServerName(this) else it
 +        }
++        _advertisedName = effectiveName
  
          val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
          wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
-@@ -407,13 +453,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -407,13 +462,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
          videoRenderer.benchmarkLog = prefs[Prefs.BENCHMARK_LOG]
          videoRenderer.benchmarkLogCallback = { msg -> logCallback?.invoke(msg) }
          videoRenderer.scheduledOutputBufferRelease = prefs[Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE]
@@ -947,7 +967,7 @@ index 7dfdabc..e39b261 100644
          NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_MIRROR, advertiseMirroring)
          NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_AUDIO, advertiseAudio)
          NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
-@@ -454,6 +502,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -454,6 +511,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
              }.apply { start() }
          } else {
              nsdManager?.register(services)
@@ -956,7 +976,7 @@ index 7dfdabc..e39b261 100644
          }
  
          _serverState.value = ServerState.RUNNING
-@@ -464,6 +514,64 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -464,6 +523,64 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
          log("Server started on port $port")
      }
  
@@ -1021,7 +1041,38 @@ index 7dfdabc..e39b261 100644
      private fun _orientationFollowsDevice(): Boolean =
          prefs[Prefs.RESOLUTION] == Prefs.AUTO
  
-@@ -529,6 +637,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -521,6 +638,30 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+         stopSelf()
+     }
+ 
++    // Name currently announced on the network
++    private var _advertisedName = ""
++
++    private val _deviceNameObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
++        override fun onChange(selfChange: Boolean) {
++            _mainHandler.removeCallbacks(_applyDeviceName)
++            _mainHandler.postDelayed(_applyDeviceName, 2_000)
++        }
++    }
++
++    // Re-announce with the new device name; waits for active sessions to end first
++    private val _applyDeviceName: Runnable = object : Runnable {
++        override fun run() {
++            val manual = prefs[Prefs.SERVER_NAME].trim().let { it.isNotEmpty() && it != LEGACY_DEFAULT_NAME }
++            if (manual || _serverState.value != ServerState.RUNNING) return
++            if (autoServerName(this@AirPlayService) == _advertisedName) return
++            if (_connectionCount.value > 0) {
++                _mainHandler.postDelayed(this, 30_000)
++                return
++            }
++            _restartServer()
++        }
++    }
++
+     private fun _restartServer() {
+         if (_serverState.value != ServerState.RUNNING) return
+         _shutdown()
+@@ -529,6 +670,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
      }
  
      private fun _shutdown() {
@@ -1030,15 +1081,17 @@ index 7dfdabc..e39b261 100644
          audioRenderer.detachEngine()
          if (nativeHandle != 0L) {
              NativeBridge.nativeStop(nativeHandle)
-@@ -618,6 +728,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -618,6 +761,9 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
      }
  
      override fun onDestroy() {
++        _mainHandler.removeCallbacks(_applyDeviceName)
++        runCatching { contentResolver.unregisterContentObserver(_deviceNameObserver) }
 +        try { unregisterReceiver(_restrictionsReceiver) } catch (_: Exception) {}
          stopServer()
          dacpPlayer.release()
          mediaReceiver?.let {
-@@ -750,6 +861,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -750,6 +896,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
      }
  
      override fun onConnectionInit() {
@@ -1046,7 +1099,7 @@ index 7dfdabc..e39b261 100644
          val firstConnection = _connectionCount.value == 0
          _connectionCount.value++
          log("Client connected (${_connectionCount.value})")
-@@ -764,8 +876,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -764,8 +911,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
      override fun onConnectionDestroy() {
          _connectionCount.value = (_connectionCount.value - 1).coerceAtLeast(0)
          if (_connectionCount.value == 0) {
@@ -1061,7 +1114,7 @@ index 7dfdabc..e39b261 100644
              // last client gone: release audio output devices to save power
              audioRenderer.stop()
              _audioOnly.value = false
-@@ -801,6 +917,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -801,6 +952,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
          _lastPin = pin
          pinCallback?.invoke(pin)
          _updateMediaNotification()
@@ -1070,7 +1123,7 @@ index 7dfdabc..e39b261 100644
      }
  
      override fun onMetadata(data: ByteArray) {
-@@ -1159,5 +1277,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
+@@ -1159,5 +1312,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
  
          private const val AUDIO_CONFIG_DEBOUNCE_MS = 500L
          private const val SERVER_RESTART_DEBOUNCE_MS = 500L
@@ -1417,7 +1470,7 @@ index d4af0f5..0e3a4d0 100644
  }
  
 diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt b/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
-index 03b520f..6e6abdc 100644
+index 03b520f..f9eaafa 100644
 --- a/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
 +++ b/app/src/main/kotlin/io/github/jqssun/airplay/ui/SettingsScreen.kt
 @@ -26,8 +26,15 @@ import androidx.compose.ui.unit.dp
@@ -1466,7 +1519,18 @@ index 03b520f..6e6abdc 100644
  
      Column(
          modifier = Modifier
-@@ -108,6 +131,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
+@@ -84,7 +107,9 @@ fun SettingsScreen(viewModel: MainViewModel) {
+         SettingTextField(
+             label = stringResource(R.string.setting_server_name),
+             value = serverName,
+-            onCommit = { viewModel.set(Prefs.SERVER_NAME, it) }
++            // Show which device name is used when the field is empty
++            description = stringResource(R.string.setting_server_name_desc, io.github.jqssun.airplay.autoServerName(LocalContext.current)),
++            onCommit = { viewModel.set(Prefs.SERVER_NAME, it.trim()) }
+         )
+ 
+         SettingTextField(
+@@ -108,6 +133,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
              onCheckedChange = { viewModel.set(Prefs.RUN_IN_BACKGROUND, it) }
          )
  
@@ -1480,7 +1544,7 @@ index 03b520f..6e6abdc 100644
          SectionHeader(stringResource(R.string.section_connection))
  
          SettingSegmented(
-@@ -223,6 +253,89 @@ fun SettingsScreen(viewModel: MainViewModel) {
+@@ -223,6 +255,89 @@ fun SettingsScreen(viewModel: MainViewModel) {
              onCheckedChange = { viewModel.set(Prefs.FORCE_SW_AAC, it) }
          )
  
@@ -1736,10 +1800,10 @@ index 8fde456..0f3ea70 100644
  </adaptive-icon>
 diff --git a/app/src/main/res/values-it/strings.xml b/app/src/main/res/values-it/strings.xml
 new file mode 100644
-index 0000000..2654090
+index 0000000..a02a56b
 --- /dev/null
 +++ b/app/src/main/res/values-it/strings.xml
-@@ -0,0 +1,202 @@
+@@ -0,0 +1,203 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!-- Italian translation -->
 +<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
@@ -1941,9 +2005,10 @@ index 0000000..2654090
 +    <string name="about_license">Software open source, licenza GPL-3.0. Basato su android-airplay-server di jqssun e su UxPlay. Codice sorgente: github.com/fpergolotti-stackMM/marymount-airplay. AirPlay è un marchio di Apple Inc.; questa app non è affiliata ad Apple.</string>
 +    <string name="btn_donate">Offri un caffè allo sviluppatore</string>
 +    <string name="btn_donate_desc">Sostieni lo sviluppo con una donazione tramite PayPal</string>
++    <string name="setting_server_name_desc">Lascia vuoto per usare il nome del dispositivo: «%1$s». Un nome scritto qui ha la precedenza.</string>
 +</resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index ef5286c..1fd2c38 100644
+index ef5286c..51f52b6 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -1,6 +1,6 @@
@@ -1971,7 +2036,7 @@ index ef5286c..1fd2c38 100644
  
      <!-- Settings: Connection -->
      <string name="setting_require_pin">Require PIN (Beta)</string>
-@@ -199,4 +202,32 @@
+@@ -199,4 +202,33 @@
      <string name="debug_audio_glitch">Glitch: trim=%1$d drop=%2$d sil=%3$d ur=%4$d xrun=%5$d</string>
      <string name="debug_audio_decode">Decode: %1$s</string>
      <string name="debug_clients">Clients: %1$d</string>
@@ -2003,6 +2068,7 @@ index ef5286c..1fd2c38 100644
 +    <string name="about_license">Open source software, GPL-3.0 licence. Based on android-airplay-server by jqssun and UxPlay. Source code: github.com/fpergolotti-stackMM/marymount-airplay. AirPlay is a trademark of Apple Inc.; this app is not affiliated with Apple.</string>
 +    <string name="btn_donate">Buy the developer a coffee</string>
 +    <string name="btn_donate_desc">Support development with a donation via PayPal</string>
++    <string name="setting_server_name_desc">Leave empty to use the device name: “%1$s”. A name typed here takes priority.</string>
  </resources>
 diff --git a/app/src/main/res/xml/app_restrictions.xml b/app/src/main/res/xml/app_restrictions.xml
 new file mode 100644
