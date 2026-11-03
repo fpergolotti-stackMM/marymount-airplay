@@ -1,0 +1,97 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 4e3b38b..cc762b6 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -35,8 +35,8 @@ android {
+         applicationId = "it.marymount.airplay"
+         minSdk = 24
+         targetSdk = 37
+-        versionCode = 6
+-        versionName = "1.2.2-mm (upstream 0.0.33)"
++        versionCode = 7
++        versionName = "1.2.3-mm (upstream 0.0.33)"
+ 
+         externalNativeBuild {
+             cmake {
+diff --git a/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt b/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt
+index 2100ea6..991015b 100644
+--- a/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt
++++ b/app/src/main/kotlin/io/github/jqssun/airplay/ui/MainScreen.kt
+@@ -54,6 +54,10 @@ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.text.style.TextAlign
+ import androidx.compose.ui.text.style.TextOverflow
+ import androidx.compose.ui.unit.dp
++import androidx.compose.ui.platform.LocalDensity
++import androidx.compose.ui.unit.Density
++import androidx.compose.ui.unit.Constraints
++import androidx.compose.ui.layout.SubcomposeLayout
+ import androidx.core.view.WindowCompat
+ import androidx.core.view.WindowInsetsCompat
+ import androidx.core.view.WindowInsetsControllerCompat
+@@ -918,22 +922,20 @@ private fun MarymountWelcome(name: String, requirePin: Boolean) {
+             ) {
+                 logoView()
+                 Spacer(Modifier.width(56.dp))
+-                card(
+-                    Modifier
+-                        .weight(1f, fill = false)
+-                        .widthIn(max = 780.dp)
+-                        .verticalScroll(rememberScrollState())
+-                )
++                // Marymount: no scrolling - the card shrinks (text included) to fit the screen
++                MarymountFitToHeight(Modifier.weight(1f, fill = false)) {
++                    card(Modifier.widthIn(max = 780.dp))
++                }
+             }
+         } else {
+-            Column(
+-                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+-                horizontalAlignment = Alignment.CenterHorizontally,
+-                verticalArrangement = Arrangement.Center
+-            ) {
+-                logoView()
+-                Spacer(Modifier.height(28.dp))
+-                card(Modifier.widthIn(max = 780.dp))
++            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
++                MarymountFitToHeight {
++                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
++                        logoView()
++                        Spacer(Modifier.height(28.dp))
++                        card(Modifier.widthIn(max = 780.dp))
++                    }
++                }
+             }
+         }
+         // Marymount: in-house credit
+@@ -946,6 +948,31 @@ private fun MarymountWelcome(name: String, requirePin: Boolean) {
+     }
+ }
+ 
++// Marymount: lays out [content] at full size; if it is taller than the space available,
++// it is laid out again with a proportionally smaller density (text, icons and spacing
++// all shrink together) so that everything stays visible without scrolling.
++@Composable
++private fun MarymountFitToHeight(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
++    val base = LocalDensity.current
++    SubcomposeLayout(modifier) { constraints ->
++        val free = constraints.copy(minWidth = 0, minHeight = 0)
++        val probe = subcompose("probe", content).map { it.measure(free.copy(maxHeight = Constraints.Infinity)) }
++        val natural = probe.maxOfOrNull { it.height } ?: 0
++        val limit = constraints.maxHeight
++        val placeables = if (limit != Constraints.Infinity && natural > limit && natural > 0) {
++            val factor = (limit.toFloat() / natural * 0.98f).coerceIn(0.45f, 1f)
++            subcompose("fit") {
++                CompositionLocalProvider(
++                    LocalDensity provides Density(base.density * factor, base.fontScale)
++                ) { content() }
++            }.map { it.measure(free) }
++        } else probe
++        val w = placeables.maxOfOrNull { it.width } ?: 0
++        val h = (placeables.maxOfOrNull { it.height } ?: 0).coerceAtMost(limit)
++        layout(w, h) { placeables.forEach { it.place(0, 0) } }
++    }
++}
++
+ @Composable
+ private fun MarymountStep(number: Int, text: String, extra: (@Composable () -> Unit)? = null) {
+     Row(
